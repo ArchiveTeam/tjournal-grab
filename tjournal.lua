@@ -416,6 +416,11 @@ wget.callbacks.httploop_result = function(url, err, http_stat)
     return wget.actions.EXIT
   end
 
+  if status_code == 403 and url["url"] == primary_url then
+    abort_item()
+    return wget.actions.EXIT
+  end
+
   if (status_code == 0 or status_code >= 400)
     and status_code ~= 404 then
     io.stdout:write("Server returned bad response. Sleeping.\n")
@@ -425,7 +430,7 @@ wget.callbacks.httploop_result = function(url, err, http_stat)
     if tries > maxtries then
       tries = 0
       abort_item()
-      return wget.actions.ABORT
+      return wget.actions.EXIT
     end
     os.execute("sleep " .. math.random(
       math.floor(math.pow(2, tries-0.5)),
