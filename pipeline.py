@@ -59,7 +59,7 @@ if not WGET_AT:
 #
 # Update this each time you make a non-cosmetic change.
 # It will be added to the WARC files and reported to the tracker.
-VERSION = '20220628.03'
+VERSION = '20220904.01'
 USER_AGENT = 'Archive Team'
 TRACKER_ID = 'tjournal'
 TRACKER_HOST = 'legacy-api.arpa.li'
@@ -278,6 +278,10 @@ class WgetArgs(object):
             if item_type == 'post':
                 wget_args.extend(['--warc-header', '{}-post: {}'.format(item_site, item_value)])
                 wget_args.append('https://{}/{}'.format(item_site, item_value))
+            elif item_type == 'url':
+                item_value = item_site + ':' + item_value
+                wget_args.extend(['--warc-header', 'media-url: {}'.format(item_value)])
+                wget_args.append(item_value)
             else:
                 raise Exception('Unknown item')
 
@@ -298,7 +302,7 @@ class WgetArgs(object):
 project = Project(
     title='TJournal',
     project_html='''
-        <img class="project-logo" alt="Project logo" src="https://wiki.archiveteam.org/images/thumb/f/f3/Archive_team.png/235px-Archive_team.png" height="50px" title=""/>
+        <img class="project-logo" alt="Project logo" src="https://wiki.archiveteam.org/images/a/a8/Tjournal-logo.png" height="50px" title=""/>
         <h2>tjournal.ru <span class="links"><a href="https://tjournal.ru/">Website</a> &middot; <a href="http://tracker.archiveteam.org/tjournal/">Leaderboard</a></span></h2>
         <p>Archiving TJournal and others.</p>
     '''

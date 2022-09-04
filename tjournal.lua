@@ -29,6 +29,9 @@ local discovered_items = {}
 local bad_items = {}
 local ids = {}
 local got_pages = {}
+local allowed_urls = {}
+local primary_url = nil
+local secondary_url = nil
 
 local retry_url = false
 
@@ -72,7 +75,6 @@ processed = function(url)
 end
 
 discover_item = function(target, item)
-print('queuing' , item)
   if not target[item] then
     target[item] = true
   end
@@ -88,7 +90,21 @@ find_item = function(url)
     if item_name_new ~= item_name then
       ids = {}
       got_pages = {}
+      primary_url = url
       ids[item_value] = true
+      abortgrab = false
+      tries = 0
+      item_name = item_name_new
+      print("Archiving item " .. item_name)
+    end
+    return nil
+  end
+  if string.match(url, "^https?://leonardo%.osnova%.io/") then
+    item_type = "url"
+    item_site = nil
+    item_value = url
+    item_name_new = item_type .. ":" .. item_value
+    if item_name_new ~= item_name then
       abortgrab = false
       tries = 0
       item_name = item_name_new
@@ -98,12 +114,27 @@ find_item = function(url)
 end
 
 allowed = function(url, parenturl)
+  if string.match(url, "^https?://leonardo%.osnova%.io/") then
+    discovered_items["url:" .. url] = true
+    return false
+  end
+
+  if allowed_urls[url] then
+    return true
+  end
+
   if string.match(url, "^https?://[^/]-([^%./]+%.[^%./]+)/") == item_site then
     for s in string.gmatch(url, "([0-9]+)") do
       if ids[s] then
         return true
       end
     end
+  end
+
+  if string.match(url, "^https?://([^/]+)/") ~= item_site
+    and not string.match(url, "^https?://leonardo%.osnova%.io") then
+    discover_item(discovered_outlinks, url)
+    return false
   end
 
   return false
@@ -113,17 +144,24 @@ wget.callbacks.download_child_p = function(urlpos, parent, depth, start_url_pars
   local url = urlpos["url"]["url"]
   local html = urlpos["link_expect_html"]
 
+  if parent["url"] == primary_url then
+    return true
+  end
+
+  if processed(url) then
+    return false
+  end
+
   if allowed(url) then
     return true
   end
 
-  if urlpos["link_refresh_p"] ~= 0 or urlpos["link_inline_p"] ~= 0 then
-    return true
+  if discovered_items["url:" .. url] then
+    return false
   end
 
-  if string.match(url, "^https?://([^/]+)/") ~= item_site then
-    discovered_outlinks[url] = true
-    return false
+  if urlpos["link_refresh_p"] ~= 0 or urlpos["link_inline_p"] ~= 0 then
+    return true
   end
 
   return false
@@ -150,6 +188,9 @@ wget.callbacks.get_urls = function(file, url, is_css, iri)
   end
 
   local function check(newurl)
+    if string.match(newurl, "^https?://[^/]+/comments/loading/[0-9]+") then
+      return false
+    end
     newurl = decode_codepoint(newurl)
     local origurl = url
     local url = string.match(newurl, "^([^#]+)")
@@ -216,20 +257,48 @@ wget.callbacks.get_urls = function(file, url, is_css, iri)
     end
   end
 
-  if allowed(url) and status_code < 300 then
-    html = read_file(file)
-    if string.match(url, "/comments/loading/") then
-      if string.match(html, '^{"') then
-        local json = JSON:decode(html)
-        if json["data"]["remaining_count"] ~= 0 then
-          abort_item()
-          return {}
-        end
-        for _, data in pairs(json["data"]["items"]) do
-          wget.callbacks.get_urls(data["html"])
-        end
-        return urls
+  if allowed(url) and status_code < 300
+    and string.match(url, "^https?://[^/]-([^%./]+%.[^%./]+)/") == item_site then
+    if string.match(file, "^%s*<") then
+      html = file
+    else
+      html = read_file(file)
+    end
+    check(secondary_url .. "?comments")
+    if not got_pages["hit"] then
+      table.insert(urls, {
+        url="https://tjournal.ru/hit/" .. item_value,
+        body_data="mode=raw",
+        method="POST",
+        headers={
+          ["X-This-Is-CSRF"]="THIS IS SPARTA!"
+        }
+      })
+      got_pages["hit"] = true
+    end
+    if string.match(url, "/comments/loading/")
+      and string.match(html, '^{"') then
+      local json = JSON:decode(html)
+      if json["data"]["remaining_count"] ~= 0 or json["rc"] ~= 200 then
+        abort_item()
+        return {}
       end
+      for _, data in pairs(json["data"]["items"]) do
+        wget.callbacks.get_urls(data["html"], url)
+      end
+      return urls
+    end
+    if string.match(url, "^https?://[^/]+/comments/[0-9]+/get$")
+      and string.match(html, '^{"') then
+      local json = JSON:decode(html)
+      if json["rc"] ~= 200 then
+        abort_item()
+        return {}
+      end
+      for _, data in pairs(json["data"]) do
+        wget.callbacks.get_urls(data["html"], url)
+      end
+      return urls
     end
     for comments_data in string.gmatch(html, '<div[^>]+(class="comment__load%-more[^>]+)"') do
       data_ids = string.match(comments_data, 'data%-ids="([^"]+)"')
@@ -244,9 +313,45 @@ wget.callbacks.get_urls = function(file, url, is_css, iri)
       if not got_pages[data_ids] then
         table.insert(urls, {
           url="https://" .. item_site .. "/comments/loading/" .. item_value,
-          body_data="ids=" .. data_ids .. "&with_subtree=true&mode=raw"
+          body_data="ids=" .. data_ids .. "&with_subtree=true&mode=raw",
+          method="POST",
+          headers={
+            ["X-This-Is-CSRF"]="THIS IS SPARTA!"
+          }
         })
         got_pages[data_ids] = true
+      end
+    end
+    for attribute, suffixes in pairs({
+      ["data%-image%-src"]={
+        "/",
+        "/-/preview/{}/-/format/webp/",
+        "/-/scale_crop/64x64/-/format/webp/",
+        "/-/scale_crop/108x108/-/format/webp/",
+        "/-/scale_crop/172x172/-/format/webp/",
+        "/-/scale_crop/200x200/-/format/webp/",
+        "/-/scale_crop/1024x1024/-/format/webp/",
+      },
+      ["data%-video%-thumbnail"]={
+        "/",
+        "/-/format/webp/-/preview/{}/",
+      },
+      ["data%-video%-mp4"]={
+        "/",
+        "/-/format/mp4/",
+      }
+    }) do
+      for newurl in string.gmatch(html, attribute .. '="([^"]+)"') do
+        local base = string.match(newurl, "^(https?://leonardo%.osnova%.io/[a-f0-9%-]+)")
+        if base then
+          for _, suffix in pairs(suffixes) do
+            for i=300,1100,100 do
+              local newurl_ = base .. string.gsub(suffix, "{}", tostring(i))
+              allowed_urls[newurl_] = true
+              check(newurl_)
+            end
+          end
+        end
       end
     end
     for newurl in string.gmatch(string.gsub(html, "&quot;", '"'), '([^"]+)') do
@@ -296,6 +401,9 @@ wget.callbacks.httploop_result = function(url, err, http_stat)
       tries = 0
       return wget.actions.EXIT
     end
+    if url["url"] == primary_url then
+      secondary_url = newloc
+    end
   end
 
   if status_code == 200 then
@@ -309,11 +417,10 @@ wget.callbacks.httploop_result = function(url, err, http_stat)
   end
 
   if (status_code == 0 or status_code >= 400)
-    and status_code ~= 404
-    and status_code ~= 403 then
+    and status_code ~= 404 then
     io.stdout:write("Server returned bad response. Sleeping.\n")
     io.stdout:flush()
-    local maxtries = 10
+    local maxtries = 4
     tries = tries + 1
     if tries > maxtries then
       tries = 0
@@ -365,7 +472,8 @@ wget.callbacks.finish = function(start_time, end_time, wall_time, numurls, total
   end
   file:close()
   for key, data in pairs({
-    ["urls-ajsy1kcax4kmzsu"] = discovered_outlinks
+    ["urls-ajsy1kcax4kmzsu"] = discovered_outlinks,
+    ["tjournal-p93yjmrvti21rwg"] = discovered_items
   }) do
     print('queuing for', string.match(key, "^(.+)%-"))
     local items = nil
