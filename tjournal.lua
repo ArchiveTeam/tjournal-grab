@@ -271,7 +271,7 @@ wget.callbacks.get_urls = function(file, url, is_css, iri)
     check(secondary_url .. "?comments")
     if not got_pages["hit"] then
       table.insert(urls, {
-        url="https://" .. site .. "/hit/" .. item_value,
+        url="https://" .. item_site .. "/hit/" .. item_value,
         body_data="mode=raw",
         method="POST",
         headers={
