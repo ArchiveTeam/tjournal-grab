@@ -123,6 +123,10 @@ allowed = function(url, parenturl)
     return true
   end
 
+  if string.match(url, "%?comment=[0-9]+$") then
+    return false
+  end
+
   if string.match(url, "^https?://[^/]-([^%./]+%.[^%./]+)/") == item_site then
     for s in string.gmatch(url, "([0-9]+)") do
       if ids[s] then
@@ -267,7 +271,7 @@ wget.callbacks.get_urls = function(file, url, is_css, iri)
     check(secondary_url .. "?comments")
     if not got_pages["hit"] then
       table.insert(urls, {
-        url="https://tjournal.ru/hit/" .. item_value,
+        url="https://" .. site .. "/hit/" .. item_value,
         body_data="mode=raw",
         method="POST",
         headers={
